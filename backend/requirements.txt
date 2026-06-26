@@ -1,0 +1,35 @@
+# Core FastAPI and web framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# CORS and middleware
+python-multipart
+
+# Database and embeddings
+chromadb
+# Alternative if 0.4.15 doesn't work: chromadb==0.4.22
+
+# Machine Learning and NLP
+torch
+transformers
+numpy
+sentence-transformers
+
+# Document processing
+PyPDF2
+python-docx
+Pillow
+
+# Data handling
+pandas
+pydantic
+
+# Utilities
+python-dotenv
+pathlib
+asyncio
+
+# Development (optional)
+pytest
+pytest-asyncio
