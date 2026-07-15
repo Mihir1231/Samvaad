@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { API_BASE_URL } from "@/lib/api";
 
 // --- SVG Icon Components ---
 const Icon = ({ children, className = '' }: { children: React.ReactNode, className?: string }) => (
@@ -76,6 +77,37 @@ const ChatbotStyles = () => (
         .gemini-bar {
             animation: gemini-pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
+
+        @keyframes launcher-pop-in {
+            from { opacity: 0; transform: scale(0.6); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .launcher-pop-in {
+            animation: launcher-pop-in 0.4s ease-out forwards;
+        }
+
+        .launcher-track {
+            display: grid;
+            grid-template-columns: 0fr;
+            transition: grid-template-columns 600ms cubic-bezier(0.65, 0, 0.35, 1);
+        }
+        .launcher-track.is-expanded {
+            grid-template-columns: 1fr;
+        }
+        .launcher-track > div {
+            overflow: hidden;
+        }
+        .launcher-letter {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(4px);
+            transition: opacity 260ms ease-out, transform 260ms ease-out;
+            transition-delay: var(--letter-delay, 0ms);
+        }
+        .launcher-track.is-expanded .launcher-letter {
+            opacity: 1;
+            transform: translateY(0);
+        }
     `}</style>
 );
 
@@ -136,6 +168,7 @@ const GeminiLoadingIndicator = () => (
 
 const ChatBot = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const [launcherPhase, setLauncherPhase] = useState<'icon' | 'expanded' | 'settled'>('icon');
   const [isMinimized, setIsMinimized] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
@@ -168,6 +201,12 @@ const ChatBot = () => {
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    const expandTimer = setTimeout(() => setLauncherPhase('expanded'), 600);
+    const settleTimer = setTimeout(() => setLauncherPhase('settled'), 3800);
+    return () => { clearTimeout(expandTimer); clearTimeout(settleTimer); };
+  }, []);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -315,10 +354,10 @@ const ChatBot = () => {
         let endpoint = "";
         let payload: object = {};
         if (studentMode) {
-            endpoint = "http://localhost:8000/student_query";
+            endpoint = `${API_BASE_URL}/student_query`;
             payload = { batch, branch, semester, doc_type: docType, question: userMessage.text };
         } else if (isAgentMode) {
-            endpoint = "http://localhost:8000/rag_query";
+            endpoint = `${API_BASE_URL}/rag_query`;
             payload = { question: userMessage.text };
         }
 
@@ -383,10 +422,34 @@ const ChatBot = () => {
   };
   
     if (!isOpen) {
+    const isExpanded = launcherPhase === 'expanded';
+    const label = "Ask Samvaad";
     return (
       <div className="fixed bottom-6 right-6 z-50">
-        <button onClick={() => setIsOpen(true)} className="h-20 w-20 rounded-full bg-gradient-to-br from-blue-800 to-blue-900 shadow-lg hover:shadow-xl hover:shadow-blue-700/30 transition-all duration-300 hover:scale-110 flex items-center justify-center animate-pulse" aria-label="Open Chat">
-          <MessageCircle className="h-9 w-9 text-white" />
+        <ChatbotStyles />
+        <button
+          onClick={() => setIsOpen(true)}
+          aria-label="Open Chat"
+          className="launcher-pop-in flex items-center h-16 rounded-full bg-gradient-to-br from-blue-800 to-blue-900 shadow-lg hover:shadow-xl hover:shadow-blue-700/30 hover:scale-105 transition-[box-shadow,transform] duration-300"
+        >
+          <span className={`launcher-track ${isExpanded ? 'is-expanded' : ''}`}>
+            <div>
+              <span className="flex items-center pl-5 pr-1 text-white font-semibold whitespace-nowrap">
+                {label.split('').map((char, i) => (
+                  <span
+                    key={i}
+                    className="launcher-letter"
+                    style={{ '--letter-delay': `${isExpanded ? 150 + i * 35 : (label.length - i) * 20}ms` } as React.CSSProperties}
+                  >
+                    {char === ' ' ? ' ' : char}
+                  </span>
+                ))}
+              </span>
+            </div>
+          </span>
+          <span className="flex items-center justify-center h-16 w-16 flex-shrink-0">
+            <MessageCircle className="h-8 w-8 text-white" />
+          </span>
         </button>
       </div>
     );

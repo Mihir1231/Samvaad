@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { Shield, Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "@/lib/api";
 
 const AdminLogin = () => {
   const navigate = useNavigate();
@@ -20,7 +21,7 @@ const AdminLogin = () => {
     e.preventDefault();
 
     try {
-      const res = await fetch('http://localhost:5000/api/auth/admin/login', {
+      const res = await fetch(`${API_BASE_URL}/api/dashboard/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -28,10 +29,10 @@ const AdminLogin = () => {
 
       const data = await res.json();
 
-      if (res.ok) {
-        alert('Login successful!');
-        navigate("/admin-dashboard"); 
-        // Optional: redirect or set user context
+      if (res.ok && data.success) {
+        sessionStorage.setItem('dashboardUser', JSON.stringify(formData));
+        sessionStorage.setItem('dashboardToken', data.token);
+        navigate("/admin-dashboard");
       } else {
         alert(data.message || 'Login failed');
       }

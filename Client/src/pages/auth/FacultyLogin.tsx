@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { GraduationCap, Eye, EyeOff, Mail, Lock } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useNavigate } from "react-router-dom"; 
+import { useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "@/lib/api";
 
 const FacultyLogin = () => {
   const navigate = useNavigate(); 
@@ -20,7 +21,7 @@ const FacultyLogin = () => {
     e.preventDefault();
 
     try {
-      const res = await fetch('http://localhost:5000/api/auth/user/login', {
+      const res = await fetch(`${API_BASE_URL}/api/faculty/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -28,10 +29,10 @@ const FacultyLogin = () => {
 
       const data = await res.json();
 
-      if (res.ok) {
-        alert('Login successful!');
+      if (res.ok && data.success) {
+        sessionStorage.setItem('facultyUser', JSON.stringify({ email: formData.email }));
+        sessionStorage.setItem('facultyToken', data.token);
         navigate("/faculty-dashboard");
-        // Optional: redirect or set user context
       } else {
         alert(data.message || 'Login failed');
       }

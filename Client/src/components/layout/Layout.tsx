@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import Header from "./Header";
 import Footer from "./Footer";
-import WeatherStrip from "../weatherStrip";
+import WeatherStrip from "../WeatherStrip";
 
 interface LayoutProps {
   children: ReactNode;

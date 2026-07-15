@@ -1,10 +1,11 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { 
-  Upload, FileText, AlertCircle, CheckCircle2, Loader2, Mail, 
-  RefreshCcw, Send, Sidebar as SidebarIcon, Edit3, BarChart3, 
+import {
+  Upload, FileText, AlertCircle, CheckCircle2, Loader2, Mail,
+  RefreshCcw, Send, Sidebar as SidebarIcon, Edit3, BarChart3,
   Download, Eye, EyeOff, LogIn, LogOut, Users, FileSpreadsheet,
   Clock, Filter, FilePlus
 } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/api';
 
 // --- TYPES ---
 interface SelectOption { value: string; label: string; }
@@ -21,7 +22,6 @@ const BRANCH_OPTIONS: SelectOption[] = [ { value: 'computer_engineering', label:
 const DOCUMENT_TYPES: SelectOption[] = [ { value: 'ExamForm', label: 'Exam Form' }, { value: 'FeesNotice', label: 'Fees Notice' }, { value: 'ExamTimetable', label: 'Exam Time Table' }, { value: 'Circular', label: 'Circular' }, { value: 'EventInformation', label: 'Event Information' }, { value: 'ClassTimeTable', label: 'Class Time Table' }, { value: 'SeminarInformation', label: 'Seminar Information' }, { value: 'GeneralNotice', label: 'General Notice' }, { value: 'GeneralInformation', label: 'General Information' }, ];
 const SEMESTER_OPTIONS = Array.from({ length: 8 }, (_, i) => ({ value: (i + 1).toString(), label: `Semester ${i + 1}`, }));
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const API_BASE_URL = 'http://127.0.0.1:8000';
 
 // --- HELPER COMPONENTS ---
 interface SelectProps { id: string; value: string; onChange: (value: string) => void; options: SelectOption[]; placeholder: string; required?: boolean; }
@@ -781,7 +781,10 @@ const StudentVisitorUpload: React.FC = () => {
 const AdminDashboard: React.FC = () => {
     const [currentPage, setCurrentPage] = useState<'upload' | 'email' | 'dashboard' | 'student_upload'>('upload');
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-    const [dashboardUser, setDashboardUser] = useState<DashboardUser | null>(null);
+    const [dashboardUser, setDashboardUser] = useState<DashboardUser | null>(() => {
+        const stored = sessionStorage.getItem('dashboardUser');
+        return stored ? JSON.parse(stored) : null;
+    });
     const [dashboardLoginLoading, setDashboardLoginLoading] = useState(false);
     const [dashboardLoginError, setDashboardLoginError] = useState('');
     const [dashboardRefreshTrigger, setDashboardRefreshTrigger] = useState(0);
@@ -792,12 +795,12 @@ const AdminDashboard: React.FC = () => {
             const response = await fetch(`${API_BASE_URL}/api/dashboard/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(user), });
             if (response.ok) {
                 const data = await response.json();
-                if (data.success) { setDashboardUser(user); setCurrentPage('dashboard'); } else { setDashboardLoginError(data.message || 'Invalid credentials'); }
+                if (data.success) { sessionStorage.setItem('dashboardUser', JSON.stringify(user)); sessionStorage.setItem('dashboardToken', data.token); setDashboardUser(user); setCurrentPage('dashboard'); } else { setDashboardLoginError(data.message || 'Invalid credentials'); }
             } else { setDashboardLoginError('Invalid email or password'); }
         } catch (error) { setDashboardLoginError('Login failed. Please try again.'); } finally { setDashboardLoginLoading(false); }
     };
 
-    const handleDashboardLogout = () => { setDashboardUser(null); setCurrentPage('upload'); setDashboardLoginError(''); };
+    const handleDashboardLogout = () => { sessionStorage.removeItem('dashboardUser'); sessionStorage.removeItem('dashboardToken'); setDashboardUser(null); setCurrentPage('upload'); setDashboardLoginError(''); };
     const handleUploadSuccess = () => { setDashboardRefreshTrigger(prev => prev + 1); };
 
     if (currentPage === 'dashboard' && !dashboardUser) { return (<DashboardLogin onLogin={handleDashboardLogin} isLoading={dashboardLoginLoading} error={dashboardLoginError} />); }
