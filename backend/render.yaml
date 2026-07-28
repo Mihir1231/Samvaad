@@ -12,11 +12,9 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
-      - key: QDRANT_URL
-        sync: false
-      - key: QDRANT_API_KEY
-        sync: false
       - key: NVIDIA_NIM_API_KEY
         sync: false
       - key: ALLOWED_ORIGINS
+        sync: false
+      - key: HF_TOKEN
         sync: false

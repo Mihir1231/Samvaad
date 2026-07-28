@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+uvicorn.log
+node_modules/
+
+# Docker/Render-specific, not used by the Vercel deployment
+Dockerfile
+.dockerignore
+render.yaml
+
+# Legacy/unused prototype files
+app.py
+chatbot.py
+rag_system.py

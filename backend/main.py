@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from extraction import extract as extract_document
 from chunking import chunk_text
 from nim_client import NIMClient
-from qdrant_store import QdrantStore
+from pgvector_store import PGVectorStore
 from languages import detect_script, simple_lang_code
 from analytics_store import AnalyticsStore
 from admin_store import AdminStore, FacultyStore
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Samvaad - LDRP-ITR RAG Chatbot",
-    description="FastAPI backend: NVIDIA NIM (embed/rerank/LLM) + Qdrant Cloud retrieval + Groq email drafting",
+    description="FastAPI backend: NVIDIA NIM (embed/rerank/LLM) + pgvector retrieval + Groq email drafting",
     version="4.0.0",
     docs_url="/docs", redoc_url="/redoc"
 )
@@ -59,8 +59,6 @@ class Config:
     GROQ_TEMPERATURE = 0.3
 
     NVIDIA_NIM_API_KEY = os.getenv("NVIDIA_NIM_API_KEY")
-    QDRANT_URL = os.getenv("QDRANT_URL")
-    QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
     RETRIEVE_TOP_K = 5
     RERANK_TOP_N = 3
@@ -95,11 +93,11 @@ nim_client = NIMClient(config.NVIDIA_NIM_API_KEY)
 if not nim_client.is_configured:
     logger.error("NVIDIA_NIM_API_KEY not found. Retrieval and chat will fail until it's set in backend/.env.")
 
-qdrant_store: Optional[QdrantStore] = None
-if config.QDRANT_URL and config.QDRANT_API_KEY:
-    qdrant_store = QdrantStore(config.QDRANT_URL, config.QDRANT_API_KEY)
+qdrant_store: Optional[PGVectorStore] = None
+if config.DATABASE_URL:
+    qdrant_store = PGVectorStore(config.DATABASE_URL)
 else:
-    logger.error("QDRANT_URL/QDRANT_API_KEY not found. Set them in backend/.env.")
+    logger.error("DATABASE_URL not found. Set it in backend/.env.")
 
 admin_store: Optional[AdminStore] = None
 faculty_store: Optional[FacultyStore] = None
@@ -218,11 +216,11 @@ async def validate_dashboard_token(authorization: Optional[str]) -> Optional[str
 
 
 async def index_document(file_content: bytes, filename: str, file_hash: str, metadata: dict) -> int:
-    """Extract -> chunk -> embed each chunk (NIM bge-m3) -> upsert to Qdrant. Returns chunk count."""
+    """Extract -> chunk -> embed each chunk (NIM bge-m3) -> upsert to pgvector. Returns chunk count."""
     if qdrant_store is None or not nim_client.is_configured:
-        raise HTTPException(status_code=503, detail="Retrieval backend (Qdrant/NIM) is not configured.")
+        raise HTTPException(status_code=503, detail="Retrieval backend (pgvector/NIM) is not configured.")
 
-    doc = await asyncio.get_event_loop().run_in_executor(executor, extract_document, file_content, filename, None)
+    doc = await asyncio.get_event_loop().run_in_executor(executor, extract_document, file_content, filename)
     text = doc.text.strip()
     if not text:
         text = f"Title: {metadata.get('title', filename)}\nFile: {filename} - no text could be extracted."
@@ -251,7 +249,7 @@ async def index_document(file_content: bytes, filename: str, file_hash: str, met
 
 async def answer_query(question: str, filters: dict, lang_hint: Optional[str]) -> ChatQueryResponse:
     if qdrant_store is None or not nim_client.is_configured:
-        raise HTTPException(status_code=503, detail="Chat backend (Qdrant/NIM) is not configured.")
+        raise HTTPException(status_code=503, detail="Chat backend (pgvector/NIM) is not configured.")
 
     detected_lang = lang_hint or simple_lang_code(detect_script(question)[0])
 
@@ -420,9 +418,9 @@ async def startup_event():
     else:
         logger.warning("Groq HTTP integration failed - email generation disabled")
     if nim_client.is_configured and qdrant_store is not None:
-        logger.info("NIM + Qdrant retrieval backend ready")
+        logger.info("NIM + pgvector retrieval backend ready")
     else:
-        logger.warning("NIM/Qdrant not fully configured - /student_query and /rag_query will return 503")
+        logger.warning("NIM/pgvector not fully configured - /student_query and /rag_query will return 503")
 
 
 @app.post("/api/upload", response_model=UploadResponse)

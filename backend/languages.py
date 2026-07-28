@@ -1,18 +1,5 @@
-"""Script-based language/OCR-pack mapping for multilingual extraction and detection."""
+"""Script-based language mapping for multilingual extraction and detection."""
 from __future__ import annotations
-
-SCRIPT_TESSERACT = {
-    "devanagari": "hin+mar+san+nep",
-    "bengali": "ben+asm",
-    "gujarati": "guj",
-    "gurmukhi": "pan",
-    "oriya": "ori",
-    "tamil": "tam",
-    "telugu": "tel",
-    "kannada": "kan",
-    "malayalam": "mal",
-    "urdu": "urd",
-}
 
 # (script name, unicode range start, unicode range end)
 UNICODE_RANGES = [
@@ -47,14 +34,6 @@ def detect_script(text: str) -> list[str]:
     if not counts:
         return ["latin"]
     return sorted(counts, key=counts.get, reverse=True)
-
-
-def ocr_lang_for_script(script: str | None) -> str:
-    """Tesseract lang= string. College docs routinely mix English with the local language."""
-    if not script or script == "latin":
-        return "eng"
-    packs = SCRIPT_TESSERACT.get(script.lower())
-    return f"eng+{packs}" if packs else "eng"
 
 
 def simple_lang_code(script: str) -> str:

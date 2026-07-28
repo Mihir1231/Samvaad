@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NIM_RERANK_URL = "https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking"
 
-EMBED_MODEL = os.getenv("NIM_EMBED_MODEL", "baai/bge-m3")
-RERANK_MODEL = os.getenv("NIM_RERANK_MODEL", "nvidia/nv-rerankqa-mistral-4b-v3")
+EMBED_MODEL = os.getenv("NIM_EMBED_MODEL", "nvidia/nv-embedqa-e5-v5")
+EMBED_MODEL_FALLBACK = "baai/bge-m3"
+RERANK_MODEL = os.getenv("NIM_RERANK_MODEL", "nvidia/rerank-qa-mistral-4b")
 LLM_MODEL = os.getenv("NIM_LLM_MODEL", "meta/llama-3.1-8b-instruct")
 
 
@@ -34,16 +35,25 @@ class NIMClient:
         return self._client
 
     async def embed(self, texts: list[str], input_type: str = "passage") -> list[list[float]]:
-        """input_type: 'passage' for document chunks, 'query' for search queries."""
+        """input_type: 'passage' for document chunks, 'query' for search queries.
+        Falls back to a second model if the primary embedding model errors (NVIDIA-hosted
+        functions have intermittent per-model outages independent of the API key/account)."""
         if not texts:
             return []
         client = await self._get_client()
-        payload = {"model": EMBED_MODEL, "input": texts, "input_type": input_type, "truncate": "END"}
-        resp = await client.post(f"{NIM_BASE_URL}/embeddings", json=payload, headers=self._headers())
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        data.sort(key=lambda item: item["index"])
-        return [item["embedding"] for item in data]
+        last_error: Exception | None = None
+        for model in (EMBED_MODEL, EMBED_MODEL_FALLBACK):
+            payload = {"model": model, "input": texts, "input_type": input_type, "truncate": "END"}
+            try:
+                resp = await client.post(f"{NIM_BASE_URL}/embeddings", json=payload, headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()["data"]
+                data.sort(key=lambda item: item["index"])
+                return [item["embedding"] for item in data]
+            except Exception as e:
+                logger.warning(f"NIM embed with model {model} failed: {e}")
+                last_error = e
+        raise last_error
 
     async def rerank(self, query: str, passages: list[str], top_n: int) -> list[int]:
         """Indices into `passages`, best-first. Falls back to input order (vector-score order) on failure."""
