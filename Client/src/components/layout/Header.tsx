@@ -73,7 +73,7 @@ const Header = () => {
           >
             <div className="w-16 h-16 flex items-left justify-center ">
               <img
-                src="https://ieee-ldrpitr-sb.vercel.app/_next/image?url=https%3A%2F%2Fres.cloudinary.com%2Fdygk5jhz8%2Fimage%2Fupload%2Fv1714903054%2FStudyNotion%2FLDRP-ITR_Logo_di2kbq.png&w=256&q=75"
+                src="/ldrp-itr-logo.png"
                 alt="LDRP-ITR Logo"
                 className="w-18 h-18 object-contain"
               />
