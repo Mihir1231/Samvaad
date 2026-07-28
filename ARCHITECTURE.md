@@ -1,6 +1,6 @@
 # Samvaad — System Architecture
 
-Samvaad is the RAG-based multilingual assistant for **LDRP-ITR**, an engineering college in Gandhinagar, Gujarat. It has three user-facing surfaces (Student chatbot, Parent/Visitor chatbot, Admin/Faculty portal) built on a single FastAPI backend, an external vector database (Qdrant Cloud), and three NVIDIA-NIM-hosted models (embedding, reranker, LLM) plus one Groq-hosted model (email drafting).
+Samvaad is the RAG-based multilingual assistant for **LDRP-ITR**, an engineering college in Gandhinagar, Gujarat. It has three user-facing surfaces (Student chatbot, Parent/Visitor chatbot, Admin/Faculty portal) built on a single FastAPI backend, a Postgres/pgvector vector store (the same Neon database used for everything else), and three NVIDIA-NIM-hosted models (embedding, reranker, LLM) plus one Groq-hosted model (email drafting).
 
 > This document describes the **actual, current code** in `backend/` and `Client/`, not the aspirational roadmap in `SAMVAAD_PLAN.md`. Where the two disagree (they do, in a few important places), this document says so explicitly.
 
@@ -25,12 +25,15 @@ Samvaad is the RAG-based multilingual assistant for **LDRP-ITR**, an engineering
                                    └───┬─────────┬─────────┬──────┘
                        ┌───────────────┘         │         └───────────────┐
                        ▼                         ▼                         ▼
-          ┌─────────────────────┐   ┌─────────────────────────┐  ┌─────────────────────┐
-          │  NVIDIA NIM API      │   │   Qdrant Cloud            │  │  Neon Postgres        │
-          │  - bge-m3 (embed)    │   │   1 collection,           │  │  - admins/faculty     │
-          │  - nv-rerankqa (rer.)│   │   1 point per chunk       │  │  - activity_log       │
-          │  - Llama-3.1-8B (LLM)│   │                            │  │  - document_files     │
-          └─────────────────────┘   └─────────────────────────┘  └─────────────────────┘
+          ┌─────────────────────┐   ┌─────────────────────────────────────────────┐
+          │  NVIDIA NIM API      │   │              Neon Postgres                    │
+          │  - nv-embedqa-e5-v5   │   │  - admins/faculty                             │
+          │    (embed, bge-m3    │   │  - activity_log                               │
+          │    as fallback)      │   │  - document_files                             │
+          │  - rerank-qa-mistral  │   │  - document_chunks (pgvector, 1024-dim,       │
+          │    -4b (reranker)    │   │    cosine distance, HNSW index)               │
+          │  - Llama-3.1-8B (LLM)│   │                                                │
+          └─────────────────────┘   └─────────────────────────────────────────────┘
                        ▲
                        │ (OCR, separate hosted model, not NIM)
           ┌─────────────────────────┐        ┌─────────────────────┐
@@ -39,6 +42,8 @@ Samvaad is the RAG-based multilingual assistant for **LDRP-ITR**, an engineering
           │ ZeroGPU                 │        │  (email drafting only)│
           └─────────────────────────┘        └─────────────────────┘
 ```
+
+**Vector store migration (2026-07-28):** Qdrant Cloud was replaced with pgvector on the same Neon Postgres instance already used for auth/analytics/file storage. Qdrant Cloud's free tier was hitting cost/quota/RAM limits; pgvector removes the separate service entirely — one fewer external dependency, one fewer point of failure, no extra quota to manage. The `document_chunks` table lives in the same database as `admins`/`activity_log`/`document_files`.
 
 There is **no agent framework, no message queue, no background workers, and no WhatsApp integration in the running code.** Everything happens synchronously inside FastAPI request handlers (with a `ThreadPoolExecutor` used only to run the blocking document-extraction step off the event loop).
 
@@ -69,9 +74,9 @@ The two functions that *are* the live "brain" of the app are both in `backend/ma
 |---|---|---|
 | Frontend | React 18 + Vite + TypeScript, Tailwind, shadcn/ui | `Client/` |
 | Backend | FastAPI (Python), single `main.py` module | `backend/main.py`, 651 lines |
-| Vector store | **Qdrant Cloud** | one collection `samvaad_documents`, 1024-dim, cosine distance |
-| Embedding model | **BAAI/bge-m3**, called via NVIDIA NIM's OpenAI-compatible `/embeddings` endpoint | `backend/nim_client.py` |
-| Reranker | **`nvidia/nv-rerankqa-mistral-4b-v3`**, via NVIDIA NIM's dedicated reranking endpoint | separate URL from the chat/embed endpoint |
+| Vector store | **Postgres + pgvector**, on the same Neon database as everything else | `document_chunks` table, 1024-dim, cosine distance, HNSW index |
+| Embedding model | **`nvidia/nv-embedqa-e5-v5`**, via NVIDIA NIM's OpenAI-compatible `/embeddings` endpoint, with automatic fallback to `baai/bge-m3` on error | `backend/nim_client.py` |
+| Reranker | **`nvidia/rerank-qa-mistral-4b`**, via NVIDIA NIM's dedicated reranking endpoint | separate URL from the chat/embed endpoint |
 | LLM (chat/answer generation) | **`meta/llama-3.1-8b-instruct`** via NVIDIA NIM chat completions | env-overridable via `NIM_LLM_MODEL`; this is *not* Qwen3-32B — see §11 |
 | OCR | **Hosted Gradio Space `baidu/Unlimited-OCR`** (ZeroGPU), called over the network via `gradio_client` | *not* local Tesseract — see §7 and §11 |
 | Language detection | Pure Unicode code-point range matching (`backend/languages.py`) | no ML model, no romanized-text handling |
@@ -91,7 +96,7 @@ backend/
   chunking.py         chunk_text() — word-count-based paragraph-aware chunker
   languages.py        detect_script() / simple_lang_code() — Unicode-range language guesser
   nim_client.py        NIMClient — embed() / rerank() / chat(), one client for all 3 NIM models
-  qdrant_store.py       QdrantStore — collection lifecycle, upsert_chunks(), search(), exists_by_hash()
+  pgvector_store.py      PGVectorStore — table/index lifecycle, upsert_chunks(), search(), exists_by_hash() (pgvector, same interface Qdrant used to have)
   admin_store.py         Postgres-backed AdminStore / FacultyStore (bcrypt password check)
   analytics_store.py     Postgres-backed activity_log (uploads + email generations) for the dashboard
   file_store.py          Postgres BYTEA storage of the raw uploaded file bytes
@@ -129,17 +134,17 @@ The admin upload form (`DocumentUpload` in `AdminDashboard.tsx`) requires, befor
 | **Description** | free text | optional |
 | **File** | the document itself | required, ≤ 50MB, extension must be one of `.pdf .doc .docx .txt .jpg .jpeg .png .xlsx .csv` |
 
-These five classification fields (batch, branch, semester, document_type, plus filename) become the **Qdrant payload filter keys** used at query time — this is exactly how the student chatbot narrows retrieval to "only documents relevant to *this* student's batch/branch/semester/doc type" (§8). Get any of these wrong at upload time and the document becomes unreachable from the matching student query filter (though `answer_query()`'s filter-widening logic provides a safety net — see §8.3).
+These five classification fields (batch, branch, semester, document_type, plus filename) become the **pgvector `WHERE`-filter columns** used at query time — this is exactly how the student chatbot narrows retrieval to "only documents relevant to *this* student's batch/branch/semester/doc type" (§8). Get any of these wrong at upload time and the document becomes unreachable from the matching student query filter (though `answer_query()`'s filter-widening logic provides a safety net — see §8.3).
 
 ### 5.2 Server-side upload flow (`upload_document` in `main.py:428`)
 
 1. **Validate**: extension allow-list + 50MB size cap (`validate_file`).
 2. **Buffer to a temp file**, then read it back into memory and compute a **SHA-256 hash** of the raw bytes (`calculate_file_hash_from_stream`).
-3. **Duplicate check by content hash**: `qdrant_store.exists_by_hash(file_hash)` — if any existing chunk in Qdrant carries this exact file hash, reject as a duplicate. This catches re-uploads of byte-identical files even under a different filename.
+3. **Duplicate check by content hash**: `pgvector_store.exists_by_hash(file_hash)` — if any existing chunk row carries this exact file hash, reject as a duplicate. This catches re-uploads of byte-identical files even under a different filename.
 4. **Duplicate check by identity** (batch, branch, semester, document_type, filename) via `file_store.exists(...)` — catches "same logical slot, different content" collisions (e.g. re-uploading a corrected version under the same name is rejected; the admin must rename).
 5. Build a **metadata dict**: `title, description, filename, document_type, batch, branch, semester, file_path (a synthetic logical path string), upload_date`.
-6. Call `index_document()` (§5.3) — this is where extraction, chunking, embedding, and Qdrant upsert happen.
-7. Persist the **raw file bytes** to Postgres via `file_store.save(...)` (so the original document can be retrieved/audited later — Qdrant only ever stores chunk text, never the original file).
+6. Call `index_document()` (§5.3) — this is where extraction, chunking, embedding, and pgvector upsert happen.
+7. Persist the **raw file bytes** to Postgres via `file_store.save(...)` (so the original document can be retrieved/audited later — `document_chunks` only ever stores chunk text, never the original file).
 8. Log the upload to `analytics_store` (feeds the Analytics dashboard, §10).
 9. Return `{success, message, file_id, hash}`. `file_id` is a synthetic string (`batch-branch-semester-doctype-<8 hex chars>`), not a database primary key — it exists only for the client's own bookkeeping.
 
@@ -149,14 +154,16 @@ These five classification fields (batch, branch, semester, document_type, plus f
 doc = extract_document(file_content, filename)     # off the event loop, via ThreadPoolExecutor
 chunks = chunk_text(doc.text)                        # ~700-word chunks, 100-word overlap
 vectors = await nim_client.embed(chunks, input_type="passage")   # one batched NIM call
-# one Qdrant point per chunk, payload = metadata + {chunk_index, source_lang, text, file_hash}
-await qdrant_store.upsert_chunks(file_hash, vectors, payloads)
+# one document_chunks row per chunk, columns = {batch, branch, semester, document_type, filename, text, embedding} + file_hash
+await pgvector_store.upsert_chunks(file_hash, vectors, payloads)
 ```
 
 Two design points worth calling out explicitly, because they were historically bugs in an earlier version of this system (see the "Retrieval is structurally broken" note in `SAMVAAD_PLAN.md`, which described the *previous* implementation, not this one):
 
-- **One vector per chunk, never averaged.** The old design embedded every chunk and then `np.mean`'d them into a single vector per document — this collapsed a 30-page PDF into one blurry point and made retrieval useless. The current code stores each chunk as its own Qdrant point (`qdrant_store.py:40`), with a deterministic id `uuid5(NAMESPACE_URL, f"{file_hash}::chunk_{i}")` so re-indexing the same file is idempotent (same input → same point IDs → upsert overwrites, doesn't duplicate).
+- **One vector per chunk, never averaged.** The old design embedded every chunk and then `np.mean`'d them into a single vector per document — this collapsed a 30-page PDF into one blurry point and made retrieval useless. The current code stores each chunk as its own `document_chunks` row (`pgvector_store.py`), with a deterministic id `uuid5(NAMESPACE_URL, f"{file_hash}::chunk_{i}")` so re-indexing the same file is idempotent (same input → same row IDs → upsert overwrites, doesn't duplicate).
 - **Batched embedding, not one-call-per-chunk.** `nim_client.embed()` sends the entire chunk list to NIM in a single HTTP request and re-sorts the response by the `index` field the API returns, since NIM does not guarantee response ordering matches request ordering under the hood.
+
+**Note on payload fields:** the old Qdrant payload carried extra fields (`title`, `description`, `file_path`, `upload_date`, `chunk_index`, `source_lang`) that were never actually read back by `answer_query()` (only `text` and `filename` are used at query time). `PGVectorStore.upsert_chunks()` only persists the columns retrieval actually needs (`batch`, `branch`, `semester`, `document_type`, `filename`, `text`) plus `file_hash` for dedup — those unused fields were dropped rather than carried forward as dead columns.
 
 ### 5.4 Chunking (`chunking.py`)
 
@@ -218,16 +225,16 @@ POST /student_query   {batch, branch, semester, doc_type, question, lang?}
 POST /rag_query        {question, lang?}
 ```
 
-`student_query` builds a Qdrant filter dict from the four classification fields and calls `answer_query`; `rag_query` calls it with an **empty filter dict** (search the entire collection, no narrowing) — this is the path both the "Ask Other Query" visitor flow and any future general-purpose search would use.
+`student_query` builds a filter dict from the four classification fields and calls `answer_query`; `rag_query` calls it with an **empty filter dict** (search the entire `document_chunks` table, no narrowing) — this is the path both the "Ask Other Query" visitor flow and any future general-purpose search would use.
 
 ### 8.1 Step 1 — language detection
 
 `detected_lang = lang_hint or simple_lang_code(detect_script(question)[0])`. If the client didn't pass an explicit `lang`, the backend Unicode-scans the question text, finds the most-frequent non-Latin script block present, and maps it to an ISO code (`languages.py`). **This is not a statistical or ML language detector** — it is pure code-point range matching (Devanagari→hi, Gujarati→gu, Bengali→bn, Gurmukhi→pa, Oriya→or, Tamil→ta, Telugu→te, Kannada→kn, Malayalam→ml, Urdu→ur, anything else→en/latin). It cannot distinguish, e.g., Hindi from Marathi (both Devanagari) or detect romanized Indic text typed in Latin script ("fees kitni hai" is detected as English) — this limitation is called out explicitly in `SAMVAAD_PLAN.md` §3 as a known gap, and no mitigation for it (the plan's proposed "cheap LLM classification call" fallback) is implemented in the live code.
 
-### 8.2 Step 2 — embed the question and search Qdrant
+### 8.2 Step 2 — embed the question and search pgvector
 
-- `nim_client.embed([question], input_type="query")` — same `bge-m3` model as indexing, called with `input_type="query"` rather than `"passage"` (bge-m3 doesn't require special text prefixes the way some embedding models do, but the API still lets you tag which mode a call represents).
-- `qdrant_store.search(query_vector, filters, limit=5)` — cosine similarity search, top **5** hits (`Config.RETRIEVE_TOP_K = 5`), constrained to whichever filter fields are non-empty.
+- `nim_client.embed([question], input_type="query")` — same embedding model as indexing (`nvidia/nv-embedqa-e5-v5`, falling back to `baai/bge-m3`), called with `input_type="query"` rather than `"passage"`.
+- `pgvector_store.search(query_vector, filters, limit=5)` — `ORDER BY embedding <=> query_vector` (pgvector cosine-distance operator), top **5** hits (`Config.RETRIEVE_TOP_K = 5`), constrained to whichever filter columns are non-empty via a dynamically built `WHERE` clause.
 
 ### 8.3 Step 3 — graceful filter widening (only for `/student_query`)
 
@@ -243,7 +250,7 @@ If even a fully unfiltered search returns nothing, the endpoint returns a canned
 
 ### 8.4 Step 4 — rerank
 
-The top-5 vector-search hits are reranked by a **dedicated NIM reranker model** (`nvidia/nv-rerankqa-mistral-4b-v3`), in **one batched HTTP call** carrying the query plus all 5 passages, cut down to the top **3** (`Config.RERANK_TOP_N = 3`). The rerank endpoint is a separate URL (`https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking`) from the embed/chat endpoint (`https://integrate.api.nvidia.com/v1`) — NIM exposes reranking through NVIDIA's retrieval-specific API surface, not the general chat-completions surface.
+The top-5 vector-search hits are reranked by a **dedicated NIM reranker model** (`nvidia/rerank-qa-mistral-4b`), in **one batched HTTP call** carrying the query plus all 5 passages, cut down to the top **3** (`Config.RERANK_TOP_N = 3`). The rerank endpoint is a separate URL (`https://ai.api.nvidia.com/v1/retrieval/nvidia/reranking`) from the embed/chat endpoint (`https://integrate.api.nvidia.com/v1`) — NIM exposes reranking through NVIDIA's retrieval-specific API surface, not the general chat-completions surface. (This model name was previously wrong in this codebase — `nvidia/nv-rerankqa-mistral-4b-v3` doesn't exist on NVIDIA's catalog and every rerank call 404'd, silently falling back to unranked vector-similarity order via the mechanism described below. Fixed 2026-07-28.)
 
 If the rerank call fails for any reason (timeout, malformed response, model unavailable), `nim_client.rerank()` **falls back to the original vector-similarity order** (`fallback = list(range(min(top_n, len(passages))))`) rather than raising — so a reranker outage degrades quality slightly instead of breaking the chat endpoint entirely.
 
@@ -357,17 +364,17 @@ Covered above.
 
 ## 11. Storage model
 
-Everything durable lives in **one Neon Postgres database** plus **one Qdrant Cloud collection** — there is no local filesystem persistence for anything that needs to survive a redeploy (this was a deliberate fix: comments in `file_store.py` / `analytics_store.py` explicitly say they replace an earlier local-disk design that didn't survive redeploys on most hosts).
+Everything durable lives in **one Neon Postgres database** — there is no local filesystem persistence for anything that needs to survive a redeploy, and (as of 2026-07-28) no separate vector-database service either; pgvector runs inside the same Postgres instance (this was a deliberate fix: comments in `file_store.py` / `analytics_store.py` explicitly say they replace an earlier local-disk design that didn't survive redeploys on most hosts, and the Qdrant→pgvector move removes a second external service for the same reason).
 
-| What | Where | Table/Collection | Notes |
+| What | Where | Table | Notes |
 |---|---|---|---|
 | Admin credentials | Postgres | `admins` | email (unique) + bcrypt hash |
 | Faculty credentials | Postgres | `faculty` | same shape, separate table |
 | Upload/email activity log | Postgres | `activity_log` | one row per upload or email-draft event, feeds Analytics |
 | Raw uploaded file bytes | Postgres | `document_files` | `BYTEA` column; unique on (batch, branch, semester, document_type, filename) |
-| Chunk text + embeddings + metadata | **Qdrant Cloud** | `samvaad_documents` | 1024-dim cosine vectors; payload includes the chunk's own text (Qdrant, unlike some vector DBs, does not separately store "documents" — the searchable text must live in the payload) |
+| Chunk text + embeddings + filter columns | Postgres (**pgvector extension**) | `document_chunks` | 1024-dim cosine vectors (HNSW index), `batch`/`branch`/`semester`/`document_type`/`filename`/`text` columns, `file_hash` for dedup |
 
-All four Postgres tables use `asyncpg` connection pools created lazily on first use (`min_size=1, max_size=5`) and `CREATE TABLE IF NOT EXISTS` run at pool-creation time — there's no separate migrations system; schema creation is inline and idempotent.
+All five Postgres tables use `asyncpg` connection pools created lazily on first use (`min_size=1, max_size=5`) and `CREATE TABLE IF NOT EXISTS` / `CREATE EXTENSION IF NOT EXISTS vector` run at pool-creation time — there's no separate migrations system; schema creation is inline and idempotent.
 
 ---
 
@@ -375,7 +382,7 @@ All four Postgres tables use `asyncpg` connection pools created lazily on first 
 
 Two deployment targets are configured simultaneously:
 
-- **Render** (`render.yaml`): Docker-based web service, free plan, builds from `backend/Dockerfile`. All secrets (`DATABASE_URL`, `AUTH_SECRET_KEY`, `GROQ_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, `NVIDIA_NIM_API_KEY`, `ALLOWED_ORIGINS`, `HF_TOKEN`) are marked `sync: false` (set manually in the Render dashboard, not committed).
+- **Render** (`render.yaml`): Docker-based web service, free plan, builds from `backend/Dockerfile`. All secrets (`DATABASE_URL`, `AUTH_SECRET_KEY`, `GROQ_API_KEY`, `NVIDIA_NIM_API_KEY`, `ALLOWED_ORIGINS`, `HF_TOKEN`) are marked `sync: false` (set manually in the Render dashboard, not committed). `QDRANT_URL`/`QDRANT_API_KEY` are gone — `DATABASE_URL` now does double duty for both relational storage and the vector store.
 - **Vercel** (`backend/vercel.json`, `backend/.vercelignore`): serverless Python function target, `main.py` given 60s max duration and 1024MB memory. This is almost certainly *why* OCR was moved off local Tesseract to a hosted Space (§7) — Vercel's serverless Python runtime can't install system packages like `tesseract-ocr`/`poppler-utils`, so any OCR dependency has to be an API call, not a local binary.
 
 `app.run(host="0.0.0.0", port=8000)` in the `__main__` block already binds to all interfaces (the plan's Phase-0 "binds 127.0.0.1, breaks in Docker" issue has been fixed in the current code).
@@ -391,3 +398,4 @@ Two deployment targets are configured simultaneously:
 5. **No translation tier, no romanized-language handling, no WhatsApp, no streaming, no caching** — all planned in `SAMVAAD_PLAN.md` but not implemented; don't assume they exist when reasoning about behavior or costs.
 6. **Faculty dashboard is a stub.**
 7. **LLM model is Llama-3.1-8B via NIM, not Qwen3-32B** — if you're tuning prompts or debugging answer quality, remember the model in production is smaller/less capable than what earlier planning docs assumed.
+8. **NVIDIA-hosted embedding models can go down independently per model, not just per-account.** `baai/bge-m3` returned `500 Internal Server Error` / `Nvcf-Status: errored` on 2026-07-28 while the same API key worked fine for chat completions and other embedding models — confirmed via direct `curl`, not an auth/quota issue. The default embedding model was switched to `nvidia/nv-embedqa-e5-v5` with `nim_client.embed()` now falling back to `baai/bge-m3` on failure (both are 1024-dim, so no `pgvector` schema change was needed). If both ever fail, uploads and queries fail outright — there's no third fallback.
