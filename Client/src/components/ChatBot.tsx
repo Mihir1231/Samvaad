@@ -333,6 +333,7 @@ const ChatBot = () => {
         const endText = "Thank you! Have a great day.";
         botResponse = { id: (Date.now() + 1).toString(), text: endText, isUser: false, timestamp: new Date() };
         setIsInputDisabled(true);
+        setStudentMode(false);
         setMessages(prev => [...prev, botResponse]);
       } else {
         botResponse = { id: (Date.now() + 1).toString(), text: "I'm not sure how to handle that yet.", isUser: false, timestamp: new Date() };
@@ -371,20 +372,13 @@ const ChatBot = () => {
             const data = await res.json();
             const answerText = data.answer || "Sorry, I couldn't find an answer.";
             
-            const botMessage: Message = { id: (Date.now() + 1).toString(), text: answerText, isUser: false, timestamp: new Date(), sources: data.sources || [] };
+            const botMessage: Message = {
+                id: (Date.now() + 1).toString(), text: answerText, isUser: false, timestamp: new Date(),
+                sources: data.sources || [],
+                options: [{ text: "End Chat", payload: "end_chat" }],
+            };
             setMessages(prev => [...prev, botMessage]);
-
-            if (studentMode) {
-                setTimeout(() => {
-                    setIsInputDisabled(false);
-                    resetToMainMenu();
-                }, 1000);
-            } else if (isAgentMode) {
-                setTimeout(() => {
-                    setIsInputDisabled(true);
-                    resetToVisitorStart();
-                }, 1000);
-            }
+            setIsInputDisabled(false);
         }
     } catch (err) {
         console.error("Fetch error:", err);
