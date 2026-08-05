@@ -1,6 +1,7 @@
 """Postgres-backed auth stores (Neon) for admin and faculty accounts."""
 from __future__ import annotations
 
+import asyncio
 import asyncpg
 import bcrypt
 
@@ -32,7 +33,9 @@ class PostgresUserStore:
         row = await pool.fetchrow(f"SELECT password_hash FROM {self._table_name} WHERE email = $1", email)
         if row is None:
             return False
-        return bcrypt.checkpw(password.encode(), row["password_hash"].encode())
+        # bcrypt.checkpw is CPU-bound and blocks the event loop for ~100-300ms;
+        # run it off-loop so it doesn't stall every other in-flight request.
+        return await asyncio.to_thread(bcrypt.checkpw, password.encode(), row["password_hash"].encode())
 
     async def email_exists(self, email: str) -> bool:
         pool = await self._get_pool()

@@ -431,8 +431,12 @@ async def upload_document(
     document_type: DocumentType = Form(...),
     batch: str = Form(...),
     branch: str = Form(...),
-    semester: str = Form(...)
+    semester: str = Form(...),
+    authorization: Optional[str] = Header(None)
 ):
+    admin_email = await validate_dashboard_token(authorization)
+    if not admin_email:
+        raise HTTPException(status_code=401, detail="Unauthorized access")
     validate_file(file, check_extension=True)
     doc_type_str = document_type.value
     formatted_semester = f"Semester {semester.strip()}"
@@ -470,7 +474,7 @@ async def upload_document(
             "filename": file.filename, "title": title, "description": description,
             "document_type": doc_type_str, "batch": batch, "branch": branch,
             "semester": formatted_semester, "file_size": len(file_content),
-            "uploader_email": "admin@college.edu"
+            "uploader_email": admin_email
         })
 
         logger.info(f"Admin document uploaded and indexed ({chunk_count} chunks): {file_id}")

@@ -173,7 +173,7 @@ const AnalyticsDashboard: React.FC<{ user: DashboardUser; onLogout: () => void; 
         try {
             const response = await fetch(`${API_BASE_URL}/api/dashboard/records`, {
                 headers: {
-                    'Authorization': `Bearer ${user.email}:${user.password}`
+                    'Authorization': `Bearer ${sessionStorage.getItem('dashboardToken') || ''}`
                 }
             });
             if (response.ok) {
@@ -207,7 +207,7 @@ const AnalyticsDashboard: React.FC<{ user: DashboardUser; onLogout: () => void; 
     const handleDownloadSpreadsheet = async () => {
         try {
             const response = await fetch(`${API_BASE_URL}/api/dashboard/export`, {
-                headers: { 'Authorization': `Bearer ${user.email}:${user.password}` }
+                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('dashboardToken') || ''}` }
             });
             if (response.ok) {
                 const data = await response.json();
@@ -423,7 +423,11 @@ const DocumentUpload: React.FC<{ onUploadSuccess?: () => void }> = ({ onUploadSu
         formData.append('semester', selectedSemester);
 
         try {
-            const response = await fetch(`${API_BASE_URL}/api/upload`, { method: 'POST', body: formData });
+            const response = await fetch(`${API_BASE_URL}/api/upload`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('dashboardToken') || ''}` },
+                body: formData
+            });
             const result: UploadResponse = await response.json();
             if (response.ok && result.success) {
                 setUploadStatus({ type: 'success', message: result.message || 'File uploaded successfully!' });
